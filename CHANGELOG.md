@@ -22,6 +22,40 @@ All notable changes to meowcaller, tracked per module. Format loosely follows
   answered several seconds after the offer carry the caller's audio); the lock-ordered
   handoff is newer and covered by the unit tests above only.
 
+### engine/signaling — `implemented`
+
+- Offers older than the caller's 90s ring timeout are ignored. On reconnect
+  the server replays call stanzas queued while the client was offline —
+  including offers minutes old whose terminate sits right behind them in the
+  same backlog. Treating such an offer as live rings the consumer and races
+  the queued terminate (`OnIncomingCall` fires, then the call vanishes before
+  `Answer` lands). The age comes from the wrapper's server-computed `e`
+  attribute (0 on live delivery), so local clock skew cannot misfire the
+  gate. Live-validated against a 16-stanza offline backlog.
+
+
+### media/video-send — `implemented`
+
+- `SetVideoOrientation` now also stamps the CVO rotation into the low two
+  bits of the outbound video RTP extension's MediaFrameInfo (TS 26.114
+  clockwise quarter turns). Receivers render by these in-band bits, not the
+  stanza-level orientation, so a sender that left them zero showed its video
+  rotated on any peer whose frames need rotation. Live-validated: relayed
+  portrait video renders upright on the peer.
+
+
+### engine/video-state — `implemented`
+
+- On incoming 1:1 calls, `SetVideoEnabled` and `SetVideoOrientation` are
+  parked until the deferred callee `<accept>` is actually on the wire, then
+  applied in order. The engine reports `CallPhaseActive` on first decoded RTP,
+  ~100ms before the mute_v2-deferred accept goes out; a consumer toggling its
+  camera in that window (a call that starts as video) emitted a video-state
+  stanza no real client sends pre-accept, and the caller's phone kept
+  streaming video but went microphone-silent for the whole call.
+  Live-validated: audio flows on calls answered as video.
+
+
 ### media/relay-fanout — `implemented`
 
 - Bind and allocate on every relay in the offer for 1:1 calls, broadcast
