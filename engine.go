@@ -74,6 +74,10 @@ type engineCall struct {
 	inviteSelfDevice  groupCallDevice
 	invitePeerDevice  groupCallDevice
 
+	// Outgoing: peer devices that preaccepted (are ringing). A reject from any other
+	// device of the callee is a sibling declining for itself (#25).
+	preaccepted map[types.JID]bool
+
 	// The callee <accept> is deferred until the caller's <mute_v2> arrives.
 	acceptPending bool
 
@@ -890,13 +894,17 @@ func (e *engine) onPreAccept(ev *events.CallPreAccept) {
 	if m.call != nil && m.call.State() == CallPhaseCalling {
 		m.call.setPhase(CallPhaseRinging)
 	}
-	if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
-		e.mu.Lock()
-		if current := e.calls[ev.CallID]; current != nil {
+	e.mu.Lock()
+	if current := e.calls[ev.CallID]; current != nil {
+		if current.preaccepted == nil {
+			current.preaccepted = map[types.JID]bool{}
+		}
+		current.preaccepted[ev.From] = true
+		if device, ok := inviteDeviceCapability(ev.From, ev.Data); ok {
 			current.invitePeerDevice = device
 		}
-		e.mu.Unlock()
 	}
+	e.mu.Unlock()
 	e.c.log.Info().
 		Str("call_id", ev.CallID).
 		Str("from", ev.From.String()).
@@ -1027,6 +1035,18 @@ func (e *engine) onReject(ev *events.CallReject) {
 			Str("call_id", ev.CallID).
 			Str("from", ev.From.String()).
 			Msg("another device of this account declined the inbound call; it stays live here")
+		return
+	}
+	// Outgoing: a reject from a callee device that never preaccepted, while another
+	// device is ringing, is that sibling (e.g. a linked Web/Desktop) declining for itself.
+	e.mu.Lock()
+	sibling := len(m.preaccepted) > 0 && !m.preaccepted[ev.From]
+	e.mu.Unlock()
+	if sibling {
+		e.c.log.Info().
+			Str("call_id", ev.CallID).
+			Str("from", ev.From.String()).
+			Msg("a callee device that is not ringing declined; the call stays live")
 		return
 	}
 	e.c.log.Info().
